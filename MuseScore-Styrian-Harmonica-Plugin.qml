@@ -41,18 +41,28 @@ MuseScore {
 
       Button {
             id : buttonDiatonicPush
-            text: qsTr("Apply Diatonic Push")
+            text: qsTr("-> push <-")
             anchors.top: window.top
             anchors.left: window.left
             anchors.topMargin: 10
             anchors.leftMargin: 10
-            onClicked: applyDiatonicPush()
+            onClicked: cmdApplyDiatonicPush()
+      }
+
+      Button {
+            id : buttonDiatonicPull
+            text: qsTr("<- pull ->")
+            anchors.top: buttonDiatonicPush.bottom
+            anchors.left: window.left
+            anchors.topMargin: 10
+            anchors.leftMargin: 10
+            onClicked: cmdApplyDiatonicPull()
       }
 
       Button {
             id : buttonDiatonicTranspose
             text: qsTr("Update Diatonic Transposition")
-            anchors.top: buttonDiatonicPush.bottom
+            anchors.top: buttonDiatonicPull.bottom
             anchors.left: window.left
             anchors.topMargin: 10
             anchors.leftMargin: 10
@@ -69,6 +79,16 @@ MuseScore {
             onClicked: resetTuningOfNotes()
       }
 
+      Button {
+            id : buttonCleanDiatonicPush
+            text: qsTr("Clean-Up Diatonic Push")
+            anchors.top: buttonResetTuning.bottom
+            anchors.left: window.left
+            anchors.topMargin: 10
+            anchors.leftMargin: 10
+            onClicked: cleanDiatonicPush()
+      }
+
       // PUSH 1st / 2nd row
       property variant note_pitch_push_1_2 : [
       //    -29   -28   -27   -26   -25   -24   -23   -22   -21   -20   //
@@ -78,7 +98,7 @@ MuseScore {
       //     -9    -8    -7    -6    -5    -4    -3    -2    -1     0   //
              +1 ,  +3 ,   0 ,  +3 ,   0 ,  +3 ,  -1 ,  +1 ,  -2 ,  +2 , //  -9 ...   0
       //     +1    +2    +3    +4    +5    +6    +7    +8    +9   +10   //
-             -2 ,  -1 ,  -2 ,  -1 ,  -4 ,   0 ,  -3 ,  -1 ,  -4 ,  -2 , //  +1 ... +10
+             -2 ,  +1 ,  -2 ,  -1 ,  -4 ,   0 ,  -3 ,  -1 ,  -4 ,  -2 , //  +1 ... +10
       //    +11   +12   +13   +14   +15   +16   +17   +18   +19   +20   //
              -6 ,  -2 ,  -5 ,  -2 ,  -6 , null, null, null, null, null, // +11 ... +20
       //    +21   +22   +23   +24   +25   +26   +27   +28   +29   +30   //
@@ -283,12 +303,33 @@ MuseScore {
                         while (cursor.segment && (fullScore || cursor.tick < endTick)) {
 
                               if(callback !== null)
-                                    callback(cursor);
+                                    // do not advance cursor, requested by callback internally
+                                    if(callback(cursor))
+                                          continue;
 
                               cursor.next();
                         }
                   }
             }
+      }
+
+      function findNext(target_range, element_type) {
+
+            var endTick = target_range.endTick;
+            var fullScore = target_range.fullScore;
+            var cursor = target_range.cursor;
+
+            cursor.next();
+
+            while (cursor.segment && (fullScore || cursor.tick < endTick)) {
+
+                  if (cursor.element && cursor.element.type == element_type)
+                        return true;
+
+                  cursor.next();
+            }
+
+            return false;
       }
 
       function resetTuningOfNotes(){
@@ -301,44 +342,47 @@ MuseScore {
 
                         handleChordNotes(cursor.element, undefined, function(note, push) {
 
-                              //note.tuning = 0;
+                              note.tuning = 0;
                               note.pitchOffset = 0;
                         });
                   }
             });
       }
 
-      function applyDiatonicTuningToNotes(){
+      function getDiatonicPush(segment){
+
+            var push_lines = [];
+            var anno = segment.annotations;
+
+            for (var x = anno.length-1; x >= 0; --x) {
+                  var anno_text = anno[x].text;
+                  var only_underscore = anno_text.length > 0;
+
+                  for (var y = 0; y < anno_text.length; ++y) {
+                        if (anno_text[y] != '_') {
+                              only_underscore = false;
+                              break;
+                        }
+                  }
+
+                  if (only_underscore)
+                        push_lines.push(anno[x]);
+            }
+
+            return push_lines.length > 0 ? push_lines : null;
+      }
+
+      function applyDiatonicTuningToNotes(range){
 
             console.log("transpose");
 
-            var range = getTargetRange();
+            range = range || getTargetRange();
 
             iterateSegments(range, function (cursor){
 
                   if (cursor.element && cursor.element.type == Element.CHORD) {
 
-                        var anno = cursor.segment.annotations;
-
-                        var has_push = false;
-
-                        for (var x = anno.length-1; x >= 0; --x) {
-                              var anno_text = anno[x].text;
-                              var only_underscore = true;
-
-                              for (var y = 0; y < anno_text.length; ++y) {
-                                    if (anno_text[y] != '_') {
-                                          only_underscore = false;
-                                          break;
-                                    }
-                              }
-
-                              if (only_underscore)
-                              {
-                                    has_push = true;
-                                    break;
-                              }
-                        }
+                        var has_push = getDiatonicPush(cursor.segment) != null;
 
                         handleChordNotes(cursor.element, has_push, function(note, push) {
 
@@ -383,6 +427,7 @@ MuseScore {
                               if (pitch_offset !== null)
                               {
                                     note.pitchOffset = pitch_offset;
+                                    console.log("line: " + note.line + " diatonic: " + (push ? "push" : "pull")  + " -> pitch-offset: " + JSON.stringify(pitch_offset));
                               }
                               else
                               {
@@ -394,41 +439,205 @@ MuseScore {
             });
       }
 
-      function handleChordNotes(chord, push, func)
+      function handleChordNotes(chord, arg0, func)
       {
             var graceChords = chord.graceNotes;
             for (var i = 0; i < graceChords.length; i++) {
                   // iterate through all grace chords
                   var notes = graceChords[i].notes;
                   for (var j = 0; j < notes.length; j++)
-                        func(notes[j]);
+                        func(notes[j], arg0);
             }
             var notes = chord.notes;
             for (var i = 0; i < notes.length; i++) {
                   var note = notes[i];
-                  func(note, push);
+                  func(note, arg0);
             }
       }
 
-      function applyDiatonicPush(){
+      function cmdApplyDiatonicPush(){
             console.log("push");
 
             var range = getTargetRange();
 
             iterateSegments(range, function (cursor){
 
-                  if (cursor.element && cursor.element.type == Element.CHORD) {
-                        var text = newElement(Element.STAFF_TEXT);
-                        text.text = "_____";
-                        text.userOff.x = -2.0;
-                        text.userOff.y = 9.0;
-                        cursor.add(text);
-                  }
-            })
+                  assertPushLine(cursor);
+            });
+
+            curScore.doLayout();
+
+            applyDiatonicTuningToNotes(range);
+
+            cleanDiatonicPush(range);
       }
 
-      function applyDiatonicPull(){
+      function assertPushLine(cursor) {
+
+            var push_lines = getDiatonicPush(cursor.segment);
+
+            // return null if no new line was added
+            if (push_lines)
+                  return null;
+
+            // add a new push line and return
+            return addPushLine(cursor);
+      }
+
+      function addPushLine(cursor) {
+
+            if (cursor.element && cursor.element.type == Element.CHORD) {
+                  var text = newElement(Element.STAFF_TEXT);
+                  text.text = "_____";
+                  text.userOff.x = -2.0;
+                  text.userOff.y = 10.0;
+                  cursor.add(text);
+                  return text;
+            }
+
+            return null;
+      }
+
+      function removePushLine(cursor) {
+
+            var push_lines = getDiatonicPush(cursor.segment);
+
+            if (!push_lines)
+                  return;
+
+            for (var i = 0; i < push_lines.length; i++) {
+
+                  var line = push_lines[i];
+                  var parent = line.parent;
+
+                  if (!line || !parent)
+                        continue;
+
+                  parent.remove(line);
+            }
+      }
+
+      function cleanDiatonicPush(range){
+            console.log("clean push");
+
+            range = range || getTargetRange();
+
+            iterateSegments(range, function (cursor) {
+
+                  if (cursor.element && cursor.element.type == Element.CHORD) {
+
+                        var push_lines = getDiatonicPush(cursor.segment);
+
+                        if (!push_lines)
+                              return;
+
+                        // remove all lines except for the first
+                        for (var i = 1; i < push_lines.length; i++) {
+
+                              var line = push_lines[i];
+                              var parent = line.parent;
+
+                              if (!line || !parent)
+                                    continue;
+
+                              parent.remove(line);
+                        }
+
+                        if (push_lines.length > 1)
+                              console.log("removed " + (push_lines.length - 1) + " duplicated diatonic push-lines");
+
+                        for (var i = 0; i < push_lines.length; i++) {
+
+                              var push_line = push_lines[i];
+
+                              // TODO: need Text.textStyle QML property here
+                              // push_line.type
+
+                              if (!push_line)
+                                    return;
+
+                              if (push_line.userOff)
+                                    push_line.userOff.y = 10.0;
+                        }
+
+                        var line1 = push_lines[0];
+
+                        var ties_to_next_chord = false;
+                        handleChordNotes(cursor.element, undefined, function(note, push) {
+
+                              if (note.tieFor !== null) {
+                                    ties_to_next_chord = true;
+                              }
+                        });
+
+                        // fetch next chord
+                        if (findNext(range, Element.CHORD)) {
+
+                              if (ties_to_next_chord)
+                                    if (assertPushLine(cursor))
+                                          console.log("added new push line between tied chords");
+
+                              var push_lines_next = getDiatonicPush(cursor.segment);
+
+                              if (!push_lines_next)
+                              {
+                                    console.log("unable to find next push line");
+                                    return;
+                              }
+
+                              var line2 = push_lines_next[0];
+
+                              //console.log("line1: " + line1.pagePos + " > " + line1.bbox);
+                              //console.log("line2: " + line2.pagePos + " > " + line2.bbox);
+
+                              var t = 0;
+                              while (t++ < 20) {
+
+                                    var l1_right = line1.pagePos.x + line1.bbox.width;
+                                    var l2_left = line2.pagePos.x;
+
+                                    var padding = 1.0;
+                                    var dist = l1_right - l2_left - padding;
+
+                                    // lines touch
+                                    if (dist > 0)
+                                          break;
+
+                                    //console.log("line-dist: " + dist);
+
+                                    line1.text += "_";
+
+                                    // TODO:
+                                    // 1) use note.layout() for better performance
+                                    // 2) correctly calculate the push line bbox & placement in relation to the chord
+                                    //curScore.doLayout();
+                                    line1.layout();
+                              }
+
+                              console.log("advanced line width by: " + t);
+
+                              // tell iterateSegments() to not advance the cursor
+                              return true;
+                        }
+                  }
+            });
+
+            curScore.doLayout();
+      }
+
+      function cmdApplyDiatonicPull(){
             console.log("pull");
+
+            var range = getTargetRange();
+
+            iterateSegments(range, function (cursor){
+
+                  removePushLine(cursor);
+            });
+
+            curScore.doLayout();
+
+            applyDiatonicTuningToNotes(range);
       }
 
       onRun: {
